@@ -1,0 +1,223 @@
+---
+title: "Untitled"
+output: word_document
+---
+
+```{r}
+# You should generally clear the working space at the start of every R session
+rm(list = ls())
+
+# Set the directory
+setwd("C:/Econ-R/Case_Study")
+
+# install packages
+install.packages("stargazer")
+install.packages("ggeffects")
+install.packages("gdata")
+install.packages("psych")
+install.packages("stargazer")
+install.packages("VIF")
+install.packages("usdm")
+install.packages("lmtest")
+
+install.packages("multiwayvcov")
+install.packages("sandwich")
+install.packages("AER")
+install.packages("aod")
+install.packages("mfx")
+
+# Load libraries everytime you start a session
+library(stargazer)
+library(gdata)
+library(ggplot2)
+library(psych) 
+library(ggeffects)
+library(QuantPsyc)
+library(usdm)
+library(lmtest)
+library(multiwayvcov)
+library(sandwich)
+library(foreign)
+library(AER)
+library(aod)
+library(Rcpp)
+library(mfx)
+library(nnet)
+library(reshape2)
+
+# turn off scientific notation except for big numbers. 
+options(scipen = 9)
+```
+
+#==========================================================
+## READ AND EXPLORE DATA
+#==========================================================
+```{r}
+# read in CSV
+mydata = read.csv("BestBuy.csv")
+
+# Plot the data
+stargazer(mydata, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")   
+
+xtabs(~ Warranty, data = mydata) # two-way contingency table of categorical outcome and predictors. We want to make sure there are not 0 cells
+
+ggplot(mydata, aes(x=hhincome)) + geom_histogram(colour="green") 
+ggplot(mydata, aes(x=log(hhincome))) + geom_histogram(colour="green") 
+
+ggplot(mydata, aes(x=PriceCategory)) + geom_histogram(colour="green")
+ggplot(mydata, aes(x=log(PriceCategory))) + geom_histogram(colour="green")
+
+mydata$loghhincome<-log(mydata$hhincome)
+mydata$loghhincome<-ifelse(mydata$hhincome<0,NA,log(mydata$hhincome+1)) # generates missing values if HH_income variable is <= 0
+
+#Multicollenearity
+df = mydata[c('age','hisp','PriceCategory','married','MyBestBuy','hhincome','appliances','familysize',
+              'productgeneration','newcustomer')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99)
+
+#After removing family size and product generation
+df = mydata[c('age','hisp','PriceCategory','married','MyBestBuy','hhincome','appliances',
+              'newcustomer')]
+cor(df) # Generates the correlation matrix
+vifcor(df, th = .99) #since the VIF score is less than 3 for all variables, there is no multicollinearity now.
+```
+#==========================================================
+## LINEAR PROBABILITY MODEL
+#==========================================================
+```{r}
+
+model1<- lm(Warranty~age+married+loghhincome+hisp+newcustomer+MyBestBuy+weekend+productgeneration*appliances, data=mydata) # Let's start with the OLS estimator
+
+stargazer(model1,  
+          title="Regression Results", type="text", 
+          column.labels=c("Model-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+mydata$predictedprobability_lm<-predict(model1)
+
+ggplot(mydata, aes(y=predictedprobability_lm, x=loghhincome)) + geom_point(size=2.5)
+range(mydata$predictedprobability_lm)# Range of the predicted probability tells us there are "negative" probabilities of return for some observations!!! This cannot be possible. Therefore, linear probability model is not the right model  
+```
+#==========================================================
+## LOGIT
+#==========================================================
+```{r}
+
+sum(mydata$Warranty==0)
+sum(mydata$Warranty==1) # We have 1990 observations with Return=1 and 1216 observations with Return=0. Considering that we will estimate 9 parameters, we satisfy the minimum 10:1 ratio requirement.  Min[135,221] = 135 which is greater than 20, therefore we proceed with logit model.
+
+logit1<- glm(Warranty~age+married+loghhincome+hisp+newcustomer+MyBestBuy+weekend+productgeneration*appliances, data=mydata, family="binomial") # This is the command to run a logit regression
+
+#Using log odds:
+stargazer(logit1,
+          title="Regression Results", type="text", 
+          column.labels=c("Logit-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # For every one unit increase in household income, the log odds of purchasing warranty (versus not purchasing a warranty) increases by 0.20. Being married versus being unmarried increases the log odds of purchasing the warranty by 0.92.
+
+ # Let's obtain odds ratios.
+stargazer(logit1, 
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Regression Results", type="text", 
+          column.labels=c("OddsRatios"),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001)) #Now we can say that for a one unit increase in household income, the odds of purchasing a warranty  (versus not purchasing a warranty) increases by a factor of 1.217. Being married versus being unmarried increases the odds of purchasing the warranty by a factor of 2.516.
+
+
+#Checking for endogenity. We suspect BestBuy is endogenous and therefore removing it as there are no instruments variables available in the data.
+logit2<- glm(Warranty~age+married+loghhincome+hisp+newcustomer+weekend+productgeneration*appliances,
+             data=mydata, family="binomial")
+stargazer(logit1,logit2,  
+          title="Regression Results", type="text", 
+          column.labels=c("Logit-1","Logit-2 with endogenity"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+lrtest(logit1,logit2) #insignificant, meaning we should use model with less variables i.e logit 2 endogenous model without BestBuy variable.
+
+#Model fit assessment
+logita <- glm(Warranty~1, data=mydata, family="binomial") # This is the command to run a logit on null model 
+
+lrtest(logit2, logita) #Likelihood ratio test is significant i.e logit model is a better model as compared to null model. The chi-square of 361.62 with -9 degrees of freedom and an associated p-value of less than 0.005 tells us that our model as a whole fits significantly better than the null model.
+
+# Heteroskedasticity
+gqtest(logit2)
+bptest(logit2) #Significant Breusch-Pagan test indicates heteroscedasticity is present.
+
+#Replace standard errors with robust standard errors
+a <- logitmfx(formula=Warranty~age+married+loghhincome+hisp+newcustomer+weekend+productgeneration*appliances, data=mydata, robust=TRUE) 
+rob.std.err <- a$mfxest[,2]
+
+stargazer(logit2,
+          se=list( rob.std.err),
+          omit=c("Constant"),
+          coef = list(marginaleffects),
+          title="Regression Results", type="text", 
+          column.labels=c("Marg.Eff.w/RobStdEr" ),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001))
+
+
+## Obtain marginal effects
+marginaleffects <- a$mfxest[,1]
+marg.std.err <- a$mfxest[,2]
+
+stargazer(logit2, logit2,
+          se=list(marg.std.err, rob.std.err),
+          omit=c("Constant"),
+          coef = list(marginaleffects,marginaleffects),
+          title="Regression Results", type="text", 
+          column.labels=c("Marginal Effects","Marg.Eff.w/RobStdEr" ),
+          df=FALSE, digits=4, star.cutoffs = c(0.05,0.01,0.001)) #The one unit increase in househole income increases the probability of purchasing by 0.0453, holding other variables at their means.
+
+
+## Measuring the predictive power of the logit
+pred = predict(logit2, data=mydata,type = "response") # Let's generate predicted probabilities
+
+warranty_prediction <- ifelse(pred >= 0.5,1,0) # If the predicted probability of buying warranty is greater than 0.5, then the predicted classification will be a return (return==1), otherwise it will be a no return (return==0)
+
+misClasificError <- mean(warranty_prediction != mydata$Warranty) # count number of wrong classifications
+print(paste('Accuracy',1-misClasificError)) # calculate the correct classification rate. Accuracy is 0.6799, meaning the model correctly determines the warranty purchase (being 0 vs 1) for 68% of all observations.
+
+table(mydata$Warranty, pred>=0.5)# This generates the confusion matrix
+```
+#==========================================================
+## VISUALIZATION
+#==========================================================
+```{r}
+
+# 1. Interaction term effects on warranty purchase
+meffects1 <- ggpredict(logit2, terms=c("productgeneration", "appliances")) # generates a tidy data frame  
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("ProductGeneration") + ylab("Warranty Purchase Probability")
+
+ggplot(meffects1,aes(x, predicted, colour=group)) + geom_line(size=1.3) + 
+  xlab("ProductGeneration") + ylab("Warranty purchase probability") +
+  labs(colour="home_appliances?") + 
+  scale_colour_discrete(labels=c("No", "Yes")) +
+  theme(axis.title.x=element_text())# make the plot more self-readable
+#On observing the plot, the effect of price category on warranty purchase probablity is less for home appliances as compared to the non-home appliances.
+
+# 2. Impact of household income Vs. unmarried customers on warranty purchase
+#Out of Sample Prediction 
+newdata1 <- with(mydata,data.frame(newcustomer = mean(newcustomer), loghhincome ,age = mean(age), 
+                                   hisp = mean(hisp), productgeneration = mean(productgeneration), 
+                                   appliances = mean(appliances), weekend = mean(weekend), married = mean(married) ))
+newdata1$logincome_warranty <- predict(logit2, newdata = newdata1, type = "response")
+ggplot(newdata1, aes(x = loghhincome, y = logincome_warranty)) +geom_line(size = 1)
+#On observing the plot, we can see that as the probability of warranty purchase increases as household income increases. 
+
+```
+#==========================================================
+## PROBIT
+#==========================================================
+```{r}
+probit1<- glm(Warranty~age+married+loghhincome+hisp+newcustomer+weekend+productgeneration*appliances,
+             data=mydata, family=binomial(link="probit")) # This is the command to run a probit regression 
+stargazer(probit1,
+          title="Regression Results", type="text", 
+          column.labels=c("Probit-1"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) # For every one unit change in household income, the z-score increases by 0.11. 
+
+## Model fit assessment 
+probit1a <- glm(Warranty~1, data=mydata, family=binomial(link="probit")) # This is the command to run a logit on null model 
+
+lrtest(probit1, probit1a) #We compare the null model to our model to determine the model fit. The chi-square of 362.19 with -9 degrees of freedom and an associated p-value of less than 0.005 tells us that our model as a whole fits significantly better than the null model.
